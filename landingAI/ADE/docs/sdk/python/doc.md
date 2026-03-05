@@ -26,59 +26,76 @@ from landingai_ade import LandingAIADE
 from pathlib import Path
 
 client = LandingAIADE()  # Uses VISION_AGENT_API_KEY env var
+```
 
+### Constructor Arguments
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `api_key` | `str \| None` | env `VISION_AGENT_API_KEY` | API key |
+| `environment` | `"production" \| "eu"` | `"production"` | Region — `"production"` (US) or `"eu"` |
+| `base_url` | `str \| None` | — | Override base URL |
+| `timeout` | `float \| Timeout \| None` | SDK default | Request timeout in seconds |
+| `max_retries` | `int` | SDK default | Max retry attempts for transient errors |
+| `http_client` | `httpx.Client \| None` | — | Custom httpx client |
+
+```python
 # EU region
-client = LandingAIADE(base_url="https://api.va.eu-west-1.landing.ai/v1/ade")
+client = LandingAIADE(environment="eu")
+
+# Pass key directly
+client = LandingAIADE(api_key="v2_...")
 ```
 
-## 1. Parse API
+---
 
-### Basic Usage
+## 1. Parse
+
+Converts documents to structured markdown with visual grounding.
+
+### Arguments
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `document` | `FileTypes \| None` | One required | Local file (Path, bytes, file-like) |
+| `document_url` | `str \| None` | One required | Remote document URL |
+| `model` | `str \| None` | No | Model version (default: `dpt-2-latest`) |
+| `split` | `"page" \| None` | No | Split by pages |
+| `save_to` | `str \| None` | No | Directory to save `{filename}_parse_output.json` |
+
+### Returns `ParseResponse`
+
+```
+.markdown          → str: full document as markdown
+.chunks[]          → Chunk: {id, type, markdown, grounding: {page, box}}
+.grounding         → dict: {id → Grounding} with bounding boxes and tableCell positions
+.splits[]          → Split: {chunks[], class, identifier, markdown, pages[]} (only if split="page")
+.metadata          → ParseMetadata: {filename, page_count, duration_ms, credit_usage, version, job_id, failed_pages}
+```
+
+### Example
+
 ```python
 response = client.parse(
-    # use document= for local files, document_url= for remote URLs
-    document=Path("path/to/file"),
+    document=Path("invoice.pdf"),
     model="dpt-2-latest",
-    save_to="./output_folder",  # optional: saves as {input_file}_parse_output.json
+    save_to="./output",
 )
 
-print(response.markdown)           # Full document text
-print(len(response.chunks))        # Number of content blocks
-print(response.metadata.page_count)  # Page count
+print(response.markdown)
+print(f"{len(response.chunks)} chunks, {response.metadata.page_count} pages")
 
-# Filter chunks by type
 tables = [c for c in response.chunks if c.type == "table"]
-text = [c for c in response.chunks if c.type == "text"]
-```
-
-### Parse Options
-```python
-# From URL
-response = client.parse(document_url="https://example.com/doc.pdf")
-
-# With page splitting
-response = client.parse(document=Path("multi_page.pdf"), split="page")
-for split in response.splits:
-    print(f"Page {split.pages}: {len(split.chunks)} chunks")
-
-# Save output to directory
-response = client.parse(
-    document=Path("doc.pdf"),
-    save_to="./output",  # saves as {input_file}_parse_output.json
-)
 ```
 
 ### Visual Grounding and Table Cells
-```python
-response = client.parse(document=Path("doc.pdf"))
 
-# Access chunk locations
+```python
 for chunk in response.chunks:
     box = chunk.grounding.box
     print(f"{chunk.type} on page {chunk.grounding.page}: "
           f"({box.left:.3f}, {box.top:.3f}) → ({box.right:.3f}, {box.bottom:.3f})")
 
-# Find table cells with positions
 for gid, grounding in response.grounding.items():
     if grounding.type == "tableCell":
         pos = grounding.position
@@ -86,37 +103,27 @@ for gid, grounding in response.grounding.items():
 ```
 
 ### Extract a Cell Value by Row and Column (PDF)
+
 ```python
 import re
 
-response = client.parse(document=Path("doc.pdf"))
-
-# Get the first table chunk
 table = next(c for c in response.chunks if c.type == "table")
 
-# Parse HTML rows and cells into a (row, col) grid.
-# Table cell content lives in the chunk markdown as HTML.
 rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table.markdown, re.DOTALL)
 grid = {}
 for r, row_html in enumerate(rows):
-    for c, m in enumerate(re.finditer(
-        r'<td[^>]*>(.*?)</td>', row_html, re.DOTALL
-    )):
+    for c, m in enumerate(re.finditer(r'<td[^>]*>(.*?)</td>', row_html, re.DOTALL)):
         grid[(r, c)] = re.sub(r'<[^>]+>', '', m.group(1)).strip()
 
-# Look up a value (zero-indexed row and column)
-row, col = 1, 0
-value = grid[(row, col)]
-print(f"Row {row}, Col {col}: {value}")
+value = grid[(1, 0)]  # zero-indexed row, col
 ```
 
 ### Read a Spreadsheet Cell by Reference
+
 ```python
 import re
 
 response = client.parse(document=Path("report.xlsx"))
-
-# Get the first table chunk
 table = next(c for c in response.chunks if c.type == "table")
 
 # Spreadsheet cell IDs are "{tab_name}-{cell_ref}" (e.g., "Sheet 1-B2").
@@ -124,19 +131,39 @@ table = next(c for c in response.chunks if c.type == "table")
 cell_text = {}
 for m in re.finditer(
     r'<td[^>]*\bid=["\']([^"\']+)["\'][^>]*>(.*?)</td>',
-    table.markdown,
-    re.DOTALL,
+    table.markdown, re.DOTALL,
 ):
     cell_text[m.group(1)] = re.sub(r"<[^>]+>", "", m.group(2)).strip()
 
-# Look up by tab name and cell reference
 value = cell_text["Sheet 1-B2"]
-print(f"Sheet 1, cell B2: {value}")
 ```
 
-## 2. Extract API
+---
+
+## 2. Extract
+
+Extracts structured data from markdown using a JSON schema.
+
+### Arguments
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `schema` | `str` | Yes | JSON schema string (use `pydantic_to_json_schema()` to generate from Pydantic models) |
+| `markdown` | `FileTypes \| str \| None` | One required | Markdown content, string, or file |
+| `markdown_url` | `str \| None` | One required | URL to markdown |
+| `model` | `str \| None` | No | Model version (default: `extract-latest`) |
+| `save_to` | `str \| None` | No | Directory to save `{filename}_extract_output.json` |
+
+### Returns `ExtractResponse`
+
+```
+.extraction        → dict: extracted key-value pairs matching schema
+.extraction_metadata → dict: {field → {references: [chunk_ids]}} for grounding
+.metadata          → Metadata: {credit_usage, duration_ms, filename, job_id, version, schema_violation_error}
+```
 
 ### Pydantic Schema Extraction
+
 ```python
 from pydantic import BaseModel, Field
 from landingai_ade.lib import pydantic_to_json_schema
@@ -147,38 +174,22 @@ class InvoiceData(BaseModel):
     vendor_name: str = Field(description="Vendor or supplier name")
     line_items: list[dict] | None = Field(default=None, description="Line items")
 
-# Parse then extract (recommended: parse once, extract many)
+# Parse once, extract many
 parsed = client.parse(document=Path("invoice.pdf"))
 
 response = client.extract(
     markdown=parsed.markdown,
     schema=pydantic_to_json_schema(InvoiceData),
-    model="extract-latest"
 )
 
 invoice = InvoiceData(**response.extraction)
 print(f"Invoice {invoice.invoice_number}: ${invoice.total_amount}")
 ```
 
-### Direct Extraction from File
-```python
-response = client.extract(
-    schema=pydantic_to_json_schema(InvoiceData),
-    # use markdown= for local files, markdown_url= for remote URLs
-    markdown=Path("path/to/file.md"),
-    save_to="./output_folder",  # optional: saves as {input_file}_extract_output.json
-)
-```
-
 ### Grounding References (Tracing Back to Source)
-```python
-parsed = client.parse(document=Path("doc.pdf"))
-chunk_map = {c.id: c for c in parsed.chunks}
 
-response = client.extract(
-    markdown=parsed.markdown,
-    schema=pydantic_to_json_schema(InvoiceData)
-)
+```python
+chunk_map = {c.id: c for c in parsed.chunks}
 
 for field, meta in response.extraction_metadata.items():
     if meta.get("references"):
@@ -187,155 +198,201 @@ for field, meta in response.extraction_metadata.items():
             print(f"{field}: page {chunk.grounding.page}, type={chunk.type}")
 ```
 
-## 3. Split API
+### `pydantic_to_json_schema(model)`
 
-### Basic Splitting
+Converts a Pydantic `BaseModel` class to a resolved JSON schema string (all `$ref` inlined). Pass the result directly to `schema=`.
+
 ```python
-parsed = client.parse(document=Path("mixed_documents.pdf"))
+from landingai_ade.lib import pydantic_to_json_schema
 
-split_class = [
-    {"name": "Invoice", "description": "Sales invoice", "identifier": "Invoice Number"},
-    {"name": "Receipt", "description": "Payment receipt", "identifier": "Receipt Number"},
-]
+schema_str = pydantic_to_json_schema(InvoiceData)  # → JSON string
+```
 
-split_response = client.split(
-    split_class=split_class,
-    markdown=parsed.markdown,  # Pass Markdown string directly
-    model="split-latest",
-    save_to="output_folder",  # optional: saves as {input_file}_split_output.json
-)
+---
 
-for split in split_response.splits:
-    print(f"{split.classification}: {split.identifier} (pages {split.pages})")
+## 3. Split
+
+Classifies and splits mixed documents by type.
+
+### Arguments
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `split_class` | `Iterable[SplitClass]` | Yes | List of `{"name": str, "description"?: str, "identifier"?: str}` |
+| `markdown` | `FileTypes \| str \| None` | One required | Markdown content or file |
+| `markdown_url` | `str \| None` | One required | URL to markdown |
+| `model` | `str \| None` | No | Model version (default: `split-latest`) |
+| `save_to` | `str \| None` | No | Directory to save `{filename}_split_output.json` |
+
+### Returns `SplitResponse`
+
+```
+.splits[]          → Split: {classification, identifier, markdowns[], pages[]}
+.metadata          → Metadata: {credit_usage, duration_ms, filename, page_count}
 ```
 
 ### Split → Extract Pipeline
+
 ```python
 parsed = client.parse(document=Path("mixed_invoices.pdf"))
 
 splits = client.split(
     markdown=parsed.markdown,
     split_class=[
-        {"name": "Invoice", "identifier": "Invoice Number"},
-        {"name": "Credit Note", "identifier": "Credit Note Number"},
-    ]
+        {"name": "Invoice", "description": "Sales invoice", "identifier": "Invoice Number"},
+        {"name": "Receipt", "description": "Payment receipt", "identifier": "Receipt Number"},
+    ],
 )
 
-schema = json.dumps({
-    "type": "object",
-    "properties": {
-        "document_number": {"type": "string"},
-        "total": {"type": "number"},
-        "date": {"type": "string"}
-    }
-})
+for split in splits.splits:
+    print(f"{split.classification}: {split.identifier} (pages {split.pages})")
 
+# Extract from each split
+schema = pydantic_to_json_schema(InvoiceData)
 results = []
 for split in splits.splits:
     extracted = client.extract(markdown=split.markdowns[0], schema=schema)
-    results.append({
-        "type": split.classification,
-        "id": split.identifier,
-        **extracted.extraction
-    })
+    results.append({"type": split.classification, "id": split.identifier, **extracted.extraction})
 ```
 
+---
+
 ## 4. Parse Jobs (Async, Large Files)
+
+For files >50MB, use asynchronous processing.
+
+### `parse_jobs.create()` Arguments
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `document` | `FileTypes \| None` | One required | Local file |
+| `document_url` | `str \| None` | One required | Remote document URL |
+| `model` | `str \| None` | No | Model version (default: `dpt-2-latest`) |
+| `split` | `"page" \| None` | No | Split by pages |
+| `output_save_url` | `str \| None` | If ZDR | URL for zero data retention output |
+
+### Returns `ParseJobCreateResponse`
+
+```
+.job_id            → str: unique job identifier
+```
+
+### `parse_jobs.get(job_id)` Returns `ParseJobGetResponse`
+
+```
+.job_id            → str
+.status            → str: pending|processing|completed|failed|cancelled
+.progress          → float: 0.0 to 1.0
+.failure_reason    → str | None: error message if failed
+.data              → ParseResponse | None: full result when completed
+.output_url        → str | None: presigned URL if result >1MB (expires 1hr)
+```
+
+### `parse_jobs.list()` Arguments & Returns
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `status` | `"pending" \| "processing" \| "completed" \| "failed" \| "cancelled"` | No | Filter by status |
+| `page` | `int \| None` | No | Page number (0-indexed) |
+| `page_size` | `int \| None` | No | Items per page |
+
+```
+.jobs[]            → Job: {job_id, status, progress, received_at, failure_reason}
+.has_more          → bool | None
+```
+
+### Example
 
 ```python
 import time
 
-# Create job for large file (>50MB)
-job = client.parse_jobs.create(document=Path("large.pdf"), model="dpt-2-latest")
+job = client.parse_jobs.create(document=Path("large.pdf"))
 print(f"Job ID: {job.job_id}")
 
-# Poll for completion
 while True:
     status = client.parse_jobs.get(job.job_id)
     print(f"Status: {status.status}, Progress: {status.progress * 100:.0f}%")
 
     if status.status == "completed":
-        result = status.data
+        result = status.data  # ParseResponse
         break
     elif status.status == "failed":
         raise RuntimeError(f"Job failed: {status.failure_reason}")
 
     time.sleep(5)
-
-# List jobs
-jobs = client.parse_jobs.list(status="processing")
-for j in jobs.jobs:
-    print(f"{j.job_id}: {j.status} ({j.progress * 100:.0f}%)")
 ```
+
+---
 
 ## Error Handling
 
+### Exception Classes
+
+All exceptions inherit from `LandingAiadeError`:
+
+| Exception | HTTP Status | Description |
+|-----------|-------------|-------------|
+| `BadRequestError` | 400 | Invalid parameters |
+| `AuthenticationError` | 401 | Invalid API key |
+| `PermissionDeniedError` | 403 | Forbidden |
+| `NotFoundError` | 404 | Resource not found |
+| `UnprocessableEntityError` | 422 | Invalid file type or malformed schema |
+| `RateLimitError` | 429 | Too many requests |
+| `InternalServerError` | 5xx | Server error |
+| `APIConnectionError` | — | Network failure |
+| `APITimeoutError` | — | Request timeout |
+
+`APIStatusError` is the base for all HTTP errors and has a `status_code` attribute.
+
+### Retry with Fallback to Jobs
+
 ```python
-from landingai_ade.exceptions import (
-    RateLimitError,
-    APITimeoutError,
-    APIStatusError,
-    APIConnectionError,
-)
-import time
+from landingai_ade import RateLimitError, APITimeoutError, APIStatusError, APIConnectionError
 
 def parse_with_retry(client, file_path, max_retries=3):
     for attempt in range(max_retries):
         try:
             return client.parse(document=Path(file_path))
         except RateLimitError:
-            wait = 2 ** attempt * 10
-            print(f"Rate limited, waiting {wait}s...")
-            time.sleep(wait)
-        except APITimeoutError:
-            print("Timeout — switching to parse jobs")
+            time.sleep(2 ** attempt * 10)
+        except (APITimeoutError, APIStatusError) as e:
+            if isinstance(e, APIStatusError) and e.status_code not in (413, 504):
+                raise
+            print("Timeout or too large — switching to parse jobs")
             job = client.parse_jobs.create(document=Path(file_path))
             return poll_job(client, job.job_id)
         except APIConnectionError:
-            print(f"Network error, attempt {attempt + 1}/{max_retries}")
             time.sleep(2)
-        except APIStatusError as e:
-            if e.status_code == 413:
-                print("File too large — use parse jobs")
-                job = client.parse_jobs.create(document=Path(file_path))
-                return poll_job(client, job.job_id)
-            raise
     raise RuntimeError("Failed after retries")
 
 def poll_job(client, job_id, timeout=300):
-    import time as t
-    start = t.time()
-    while t.time() - start < timeout:
+    start = time.time()
+    while time.time() - start < timeout:
         status = client.parse_jobs.get(job_id)
         if status.status == "completed":
             return status.data
         if status.status == "failed":
             raise RuntimeError(f"Job failed: {status.failure_reason}")
-        t.sleep(5)
+        time.sleep(5)
     raise TimeoutError("Job did not complete in time")
 ```
+
+---
 
 ## Async / Concurrent Processing
 
 ```python
 import asyncio
 from landingai_ade import AsyncLandingAIADE
-from pathlib import Path
 
 async def parse_multiple(files: list[str]):
     client = AsyncLandingAIADE()
-
     tasks = [client.parse(document=Path(f)) for f in files]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    for file, result in zip(files, results):
-        if isinstance(result, Exception):
-            print(f"Failed {file}: {result}")
-        else:
-            print(f"Parsed {file}: {result.metadata.page_count} pages")
-
     return [r for r in results if not isinstance(r, Exception)]
 ```
+
+`AsyncLandingAIADE` has the same constructor and methods as `LandingAIADE` — all methods are `async`.
 
 ---
 
@@ -352,7 +409,7 @@ The following sections provide the complete API context so this document is full
 
 **Authentication**: All requests require `Authorization: Bearer $VISION_AGENT_API_KEY`
 
-### API Endpoints Summary
+### Quick Reference
 
 | Endpoint | Method | Path | Model | Input |
 |----------|--------|------|-------|-------|
@@ -362,113 +419,6 @@ The following sections provide the complete API context so this document is full
 | Create Job | POST | `/v1/ade/parse/jobs` | `dpt-2-latest` | `document` or `document_url` |
 | Get Job | GET | `/v1/ade/parse/jobs/{id}` | — | — |
 | List Jobs | GET | `/v1/ade/parse/jobs` | — | `?status=&page=&pageSize=` |
-
-### Parse API — Request Parameters
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `document` | file | One required | Local file — PDF, images (JPG/PNG/TIFF/WEBP/GIF/BMP/PSD + more), Word (DOC/DOCX/ODT), PowerPoint (PPT/PPTX/ODP), spreadsheets (XLSX/CSV) |
-| `document_url` | string | One required | Remote document URL |
-| `model` | string | No | Model version (default: `dpt-2-latest`) |
-| `split` | string | No | Split mode: `"page"` to split by pages |
-
-### Parse API — Response Structure
-
-```json
-{
-  "markdown": "string",
-  "chunks": [
-    {
-      "id": "uuid",
-      "type": "text|table|marginalia|figure|scan_code|logo|card|attestation",
-      "markdown": "string",
-      "grounding": {
-        "page": 0,
-        "box": { "left": 0.1, "top": 0.2, "right": 0.9, "bottom": 0.3 }
-      }
-    }
-  ],
-  "grounding": {
-    "chunk-id": {
-      "type": "chunkText|chunkTable|chunkFigure|...",
-      "page": 0,
-      "box": { "left": 0.1, "top": 0.2, "right": 0.9, "bottom": 0.3 }
-    },
-    "0-1": { "type": "table", "page": 0, "box": { } },
-    "0-2": {
-      "type": "tableCell", "page": 0, "box": { },
-      "position": { "row": 0, "col": 0, "rowspan": 1, "colspan": 1, "chunk_id": "uuid" }
-    }
-  },
-  "splits": [
-    { "chunks": ["id1"], "class": "page", "identifier": "0", "markdown": "string", "pages": [0] }
-  ],
-  "metadata": {
-    "filename": "document.pdf", "org_id": "org_abc", "page_count": 5,
-    "duration_ms": 1234, "credit_usage": 3, "version": "dpt-2-latest",
-    "job_id": "job_abc", "failed_pages": []
-  }
-}
-```
-
-### Extract API — Request Parameters
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `schema` | JSON string | Yes | JSON Schema defining extraction structure |
-| `markdown` | string/file | One required | Markdown content or markdown file to extract from |
-| `markdown_url` | string | One required | URL to markdown content |
-| `model` | string | No | Model version (default: `extract-latest`) |
-
-### Extract API — Response Structure
-
-```json
-{
-  "extraction": { "field1": "value1", "field2": 123 },
-  "extraction_metadata": {
-    "field1": { "references": ["chunk-uuid-1", "chunk-uuid-2"] }
-  },
-  "metadata": {
-    "credit_usage": 1, "duration_ms": 567, "filename": "document.pdf",
-    "job_id": "job_xyz", "org_id": "org_abc", "version": "extract-latest",
-    "fallback_model_version": null, "schema_violation_error": null
-  }
-}
-```
-
-### Split API — Request Parameters
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `split_class` | JSON array | Yes | Classification configuration |
-| `markdown` | string | One required | Markdown content to split |
-| `markdownUrl` | string | One required | URL to markdown content |
-| `model` | string | No | Model version (default: `split-latest`) |
-
-### Split API — Response Structure
-
-```json
-{
-  "splits": [
-    {
-      "chunks": ["chunk-id-1"], "class": "Invoice", "classification": "Invoice",
-      "identifier": "INV-001", "markdowns": ["# Invoice content..."], "pages": [0, 1]
-    }
-  ],
-  "metadata": {
-    "credit_usage": 2, "duration_ms": 789, "filename": "mixed.pdf",
-    "page_count": 10, "job_id": "job_split", "org_id": "org_abc", "version": "split-latest"
-  }
-}
-```
-
-### Parse Jobs API
-
-**Create**: `POST /parse/jobs` — same parameters as Parse plus optional `output_save_url` for ZDR.
-
-**Get Status**: `GET /parse/jobs/{job_id}` — returns `{ job_id, status, progress (0-1), failure_reason, data (ParseResponse when completed), output_url (presigned, expires 1hr) }`.
-
-**List**: `GET /parse/jobs?status=&page=&pageSize=` — returns `{ jobs: [{ job_id, status, progress, received_at }], has_more }`.
 
 ### Data Types
 
