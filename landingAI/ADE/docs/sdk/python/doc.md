@@ -27,9 +27,6 @@ from pathlib import Path
 
 client = LandingAIADE()  # Uses VISION_AGENT_API_KEY env var
 
-# Or pass key directly
-client = LandingAIADE(api_key="v2_...")
-
 # EU region
 client = LandingAIADE(base_url="https://api.va.eu-west-1.landing.ai/v1/ade")
 ```
