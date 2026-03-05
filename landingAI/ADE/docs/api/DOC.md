@@ -16,14 +16,20 @@ Complete API specification for LandingAI's Agentic Document Extraction (ADE).
 
 ADE provides a REST API for document parsing, splitting, data extraction, and large file parse jobs. All SDKs and tools (Python, TypeScript) use this same underlying API.
 
+**Core workflow**: Parse first → then Split and/or Extract from the parsed markdown. Extract and Split accept **markdown, not raw files**.
+
 ## Base Configuration
 
 | Region | Base URL |
 |--------|----------|
-| US (default) | `https://api.va.landing.ai/v1/ade` |
-| EU | `https://api.va.eu-west-1.landing.ai/v1/ade` |
+| US (default) | `https://api.va.landing.ai` |
+| EU | `https://api.va.eu-west-1.landing.ai` |
+
+All endpoint paths below are relative to the base URL (e.g., `POST {base}/v1/ade/parse`).
 
 **Authentication**: All requests require `Authorization: Bearer $VISION_AGENT_API_KEY`
+
+**Content type**: Always use `-F` (multipart form data), never `-d` (JSON body).
 
 ## SDK Quick Start
 
@@ -35,13 +41,28 @@ pip install landingai-ade
 npm install landingai-ade
 ```
 
+## Common Mistakes
+
+| Mistake | Fix |
+|---------|-----|
+| Sending a PDF/image to `/extract` or `/split` | **Parse first** to get markdown, then extract/split from that |
+| `Authorization: Basic` | Must be `Authorization: Bearer` |
+| `-F "pdf=@..."` or `-F "file=@..."` | Field name is `document` (parse) or `markdown` (extract/split) |
+| Missing `@` before file path in curl | `-F "document=@/path/to/file"` needs the `@` |
+| Using `-d` (JSON body) instead of `-F` | Always use `-F` for multipart form data |
+| Missing `schema` on extract | Required — define a JSON schema for the fields you want |
+| Not using `jq -r` when extracting markdown | Plain `jq` wraps output in quotes with escapes; `jq -r` gives raw text |
+| Sync parse on huge documents | Use `/v1/ade/parse/jobs` for files >50MB or >50 pages |
+
+---
+
 ## API Endpoints
 
 ### 1. Parse API
 
-**Endpoint**: `POST /parse`
+**Endpoint**: `POST /v1/ade/parse`
 
-Converts documents to structured json with visual grounding.
+Converts documents to structured markdown with visual grounding.
 
 #### Request Parameters
 
@@ -54,76 +75,61 @@ Converts documents to structured json with visual grounding.
 
 #### Response Structure
 
+```
+.markdown          → string: full document as markdown
+.chunks[]          → {id, type, markdown, grounding: {page, box: {left, top, right, bottom}}}
+.grounding         → {id → {type, page, box, position?}} — bounding boxes + tableCell positions
+.splits[]          → {chunks[], class, identifier, markdown, pages[]} (only if split="page")
+.metadata          → {filename, org_id, page_count, duration_ms, credit_usage, version, job_id, failed_pages}
+```
+
+<details>
+<summary>Full JSON example</summary>
+
 ```json
 {
-  "markdown": "string",          // Complete document as markdown
-  "chunks": [                    // Array of content blocks
+  "markdown": "string",
+  "chunks": [
     {
-      "id": "uuid",              // Unique identifier
-      "type": "text, table, marginalia, figure, scan_code, logo, card and attestation", //Chunk type
-      "markdown": "string",      // Chunk content
-      "grounding": {             // Location in document
-        "page": 0,               // Zero-indexed page number
-        "box": {                 // Normalized coordinates (0-1)
-          "left": 0.1,
-          "top": 0.2,
-          "right": 0.9,
-          "bottom": 0.3
-        }
+      "id": "uuid",
+      "type": "text|table|marginalia|figure|scan_code|logo|card|attestation",
+      "markdown": "string",
+      "grounding": {
+        "page": 0,
+        "box": { "left": 0.1, "top": 0.2, "right": 0.9, "bottom": 0.3 }
       }
     }
   ],
-  "grounding": {                 // Detailed location mapping
-    "chunk-id": {              // Chunk grounding (has "chunk" prefix)
-      "type": "chunkText|chunkTable|chunkFigure|chunkLogo|chunkCard|chunkAttestation| chunkScanCode|chunkForm|chunkMarginalia| chunkTitle|chunkPageHeader|chunkPageFooter| chunkPageNumber|chunkKeyValue|table|tableCell",
+  "grounding": {
+    "chunk-id": {
+      "type": "chunkText|chunkTable|chunkFigure|chunkLogo|chunkCard|chunkAttestation|chunkScanCode|chunkForm|chunkMarginalia|chunkTitle|chunkPageHeader|chunkPageFooter|chunkPageNumber|chunkKeyValue|table|tableCell",
       "page": 0,
-      "box": { /* BoundingBox */ }
+      "box": { "left": 0.1, "top": 0.2, "right": 0.9, "bottom": 0.3 }
     },
-    "0-1": {                     // Table grounding (format: page-id)
-      "type": "table",
-      "page": 0,
-      "box": { /* BoundingBox */ }
-    },
-    "0-2": {                     // Table cell grounding
-      "type": "tableCell",
-      "page": 0,
-      "box": { /* BoundingBox */ },
-      "position": {              // Cell position data
-        "row": 0,
-        "col": 0,
-        "rowspan": 1,
-        "colspan": 1,
-        "chunk_id": "uuid"       // Parent table chunk
-      }
+    "0-1": { "type": "table", "page": 0, "box": {} },
+    "0-2": {
+      "type": "tableCell", "page": 0, "box": {},
+      "position": { "row": 0, "col": 0, "rowspan": 1, "colspan": 1, "chunk_id": "uuid" }
     }
   },
-  "splits": [                    // Only if split="page"
-    {
-      "chunks": ["chunk-id-1", "chunk-id-2"],
-      "class": "page",
-      "identifier": "0",
-      "markdown": "string",
-      "pages": [0]
-    }
+  "splits": [
+    { "chunks": ["chunk-id-1"], "class": "page", "identifier": "0", "markdown": "string", "pages": [0] }
   ],
   "metadata": {
-    "filename": "document.pdf",
-    "org_id": "org_abc123",
-    "page_count": 5,
-    "duration_ms": 1234,
-    "credit_usage": 3,
-    "version": "dpt-2-latest",
-    "job_id": "job_abc123",
-    "failed_pages": []           // List of pages that failed to parse
+    "filename": "document.pdf", "org_id": "org_abc123", "page_count": 5,
+    "duration_ms": 1234, "credit_usage": 3, "version": "dpt-2-latest",
+    "job_id": "job_abc123", "failed_pages": []
   }
 }
 ```
 
+</details>
+
 ### 2. Extract API
 
-**Endpoint**: `POST /extract`
+**Endpoint**: `POST /v1/ade/extract`
 
-Extracts structured data from documents or markdown using JSON schemas.
+Extracts structured data from markdown using JSON schemas. **Accepts markdown, not raw documents** — parse first if needed.
 
 #### Request Parameters
 
@@ -136,42 +142,17 @@ Extracts structured data from documents or markdown using JSON schemas.
 
 #### Response Structure
 
-```json
-{
-  "extraction": {                // Extracted data matching schema
-    "field1": "value1",
-    "field2": 123,
-    "nested": {
-      "subfield": "value"
-    },
-    "array": [/* items */]
-  },
-  "extraction_metadata": {       // References to source chunks
-    "field1": {
-      "references": ["chunk-uuid-1", "chunk-uuid-2"]
-    },
-    "field2": {
-      "references": ["chunk-uuid-3"]
-    }
-  },
-  "metadata": {
-    "credit_usage": 1,
-    "duration_ms": 567,
-    "filename": "document.pdf",
-    "job_id": "job_xyz",
-    "org_id": "org_abc",
-    "version": "extract-latest",
-    "fallback_model_version": null,
-    "schema_violation_error": null  // Error if extraction doesn't match schema
-  }
-}
+```
+.extraction        → object: extracted key-value pairs matching schema
+.extraction_metadata → {field → {references: [chunk_ids]}} for grounding
+.metadata          → {credit_usage, duration_ms, filename, job_id, org_id, version, fallback_model_version, schema_violation_error}
 ```
 
 ### 3. Split API
 
-**Endpoint**: `POST /split`
+**Endpoint**: `POST /v1/ade/split`
 
-Classifies and splits mixed documents by type.
+Classifies and splits mixed documents by type. **Accepts markdown, not raw documents** — parse first if needed.
 
 #### Request Parameters
 
@@ -179,7 +160,7 @@ Classifies and splits mixed documents by type.
 |-----------|------|----------|-------------|
 | `split_class` | JSON array | Yes | Classification configuration (see below) |
 | `markdown` | string | One required | Markdown content to split |
-| `markdown_url` | string | One required | URL to markdown content |
+| `markdownUrl` | string | One required | URL to markdown content |
 | `model` | string | No | Model version (default: `split-latest`) |
 
 #### Split Class Structure
@@ -194,28 +175,9 @@ Classifies and splits mixed documents by type.
 
 #### Response Structure
 
-```json
-{
-  "splits": [                     // Array of classified document sections
-    {
-      "chunks": ["chunk-id-1", "chunk-id-2"],
-      "class": "Invoice",         // Same as classification
-      "classification": "Invoice",
-      "identifier": "INV-001",    // Value of identifier field
-      "markdowns": ["# Invoice content..."],
-      "pages": [0, 1]             // Page numbers this split covers
-    }
-  ],
-  "metadata": {
-    "credit_usage": 2,
-    "duration_ms": 789,
-    "filename": "mixed_documents.pdf",
-    "page_count": 10,
-    "job_id": "job_split",
-    "org_id": "org_abc",
-    "version": "split-latest"
-  }
-}
+```
+.splits[]          → {chunks[], class, classification, identifier, markdowns[], pages[]}
+.metadata          → {credit_usage, duration_ms, filename, page_count, job_id, org_id, version}
 ```
 
 ### 4. Parse Jobs API (Async)
@@ -224,7 +186,7 @@ For large files (>50MB), use asynchronous processing.
 
 #### Create Job
 
-**Endpoint**: `POST /parse/jobs`
+**Endpoint**: `POST /v1/ade/parse/jobs`
 
 **Parameters**: Same as Parse API plus:
 
@@ -232,111 +194,67 @@ For large files (>50MB), use asynchronous processing.
 |-----------|------|----------|-------------|
 | `output_save_url` | string | If ZDR | URL for zero data retention output |
 
-**Response**:
-```json
-{
-  "job_id": "cml1kaihb08dxcn01b3mlfy5b"
-}
-```
+**Response**: `{ "job_id": "cml1kaihb08dxcn01b3mlfy5b" }`
 
 #### Get Job Status
 
-**Endpoint**: `GET /parse/jobs/{job_id}`
+**Endpoint**: `GET /v1/ade/parse/jobs/{job_id}`
 
-**Response**:
-```json
-{
-  "job_id": "cml1kaihb08dxcn01b3mlfy5b",
-  "status": "pending|processing|completed|failed|cancelled",
-  "progress": 0.75,              // 0-1 progress indicator
-  "failure_reason": null,         // Error message if failed
-  "received_at": 1234567890,     // Unix timestamp
-  "data": { /* ParseResponse */ },   // Only when completed and output_save_url not used
-  "output_url": "https://...",       // Presigned URL when result >1MB or output_save_url was set (expires 1hr)
-  "org_id": "org_abc",
-  "version": "dpt-2-latest",
-  "metadata": { /* ParseMetadata */ }
-}
+```
+.job_id            → string
+.status            → string: pending|processing|completed|failed|cancelled
+.progress          → number: 0.0 to 1.0
+.failure_reason    → string | null: error message if failed
+.received_at       → number: Unix timestamp
+.data              → ParseResponse | null: full result when completed (if output_save_url not used)
+.output_url        → string | null: presigned URL when result >1MB or output_save_url was set (expires 1hr)
+.org_id            → string
+.version           → string
+.metadata          → ParseMetadata | null
 ```
 
 #### List Jobs
 
-**Endpoint**: `GET /parse/jobs`
+**Endpoint**: `GET /v1/ade/parse/jobs`
 
-**Query Parameters**:
-- `status`: Filter by status
-- `page`: Page number (0-indexed)
-- `pageSize`: Items per page
+**Query Parameters**: `status` (filter), `page` (0-indexed), `pageSize` (items per page)
 
-**Response**:
-```json
-{
-  "jobs": [                       // Array of job summaries
-    {
-      "job_id": "...",
-      "status": "processing",
-      "progress": 0.5,
-      "failure_reason": null,
-      "received_at": 1234567890
-    }
-  ],
-  "has_more": true,
-  "org_id": "org_abc"
-}
 ```
+.jobs[]            → {job_id, status, progress, failure_reason, received_at}
+.has_more          → boolean
+.org_id            → string
+```
+
+---
 
 ## Data Types
 
 ### Chunk Types
-- `text` - Characters, paragraphs, headings, lists, form fields, checkboxes, code blocks
-- `table` - Grid of rows and columns; includes spreadsheets and receipts
-- `figure` - Visual/graphical non-text content — images, graphs, flowcharts, diagrams
-- `marginalia` - Content in document margins — headers, footers, page numbers, handwritten notes
-- `logo` - Logos (DPT-2 only)
-- `card` - ID cards and driver's licenses (DPT-2 only)
-- `attestation` - Signatures, stamps, and seals (DPT-2 only)
-- `scan_code` - QR codes and barcodes (DPT-2 only)
+- `text` — Characters, paragraphs, headings, lists, form fields, checkboxes, code blocks
+- `table` — Grid of rows and columns; includes spreadsheets and receipts
+- `figure` — Visual/graphical non-text content — images, graphs, flowcharts, diagrams
+- `marginalia` — Content in document margins — headers, footers, page numbers, handwritten notes
+- `logo` — Logos (DPT-2 only)
+- `card` — ID cards and driver's licenses (DPT-2 only)
+- `attestation` — Signatures, stamps, and seals (DPT-2 only)
+- `scan_code` — QR codes and barcodes (DPT-2 only)
 
 ### Grounding Types
 
 #### For Chunks (with "chunk" prefix)
-- `chunkText` - Text chunk grounding
-- `chunkTable` - Table chunk grounding
-- `chunkFigure` - Figure chunk grounding
-- `chunkMarginalia` - Marginalia chunk grounding
-- `chunkLogo` - Logo chunk grounding
-- `chunkCard` - Card chunk grounding
-- `chunkAttestation` - Attestation chunk grounding
-- `chunkScanCode` - Scan code chunk grounding
+- `chunkText`, `chunkTable`, `chunkFigure`, `chunkMarginalia`, `chunkLogo`, `chunkCard`, `chunkAttestation`, `chunkScanCode`
 
 #### For Structure Elements (no prefix)
-- `table` - Actual table structure
-- `tableCell` - Individual table cell with position
+- `table` — Actual table structure
+- `tableCell` — Individual table cell with position
 
 ### Bounding Box
 
-All coordinates are normalized to 0-1 range:
-
-```json
-{
-  "left": 0.1,    // Distance from left edge (10% of width)
-  "top": 0.2,     // Distance from top edge (20% of height)
-  "right": 0.9,   // Distance from left edge (90% of width)
-  "bottom": 0.3   // Distance from top edge (30% of height)
-}
-```
+All coordinates normalized 0–1: `{ left, top, right, bottom }`.
 
 ### Table Cell Position
 
-```json
-{
-  "row": 0,         // Zero-indexed row number
-  "col": 0,         // Zero-indexed column number
-  "rowspan": 1,     // Number of rows this cell spans
-  "colspan": 2,     // Number of columns this cell spans
-  "chunk_id": "..." // UUID of parent table chunk
-}
-```
+`{ row, col, rowspan, colspan, chunk_id }` — all zero-indexed.
 
 ### Table Chunk Formats
 
@@ -344,9 +262,7 @@ Table chunks render as HTML. The ID format and grounding availability differ by 
 
 #### PDF / Image / Document Tables
 
-Element IDs use the format `{page_number}-{base62_sequential_number}` (page starts at 0, numbers increment per element within the page). If a page has multiple tables, numbering continues sequentially across all tables on that page. Cells may include `rowspan`/`colspan` attributes.
-
-The `grounding` object contains bounding boxes and `tableCell` position entries for every cell.
+Element IDs use the format `{page_number}-{base62_sequential_number}` (page starts at 0, numbers increment per element within the page). Cells may include `rowspan`/`colspan` attributes. The `grounding` object contains bounding boxes and `tableCell` position entries for every cell.
 
 ```html
 <a id='chunk-uuid'></a>
@@ -379,6 +295,8 @@ Element IDs use the format `{tab_name}-{cell_reference}` (e.g., `Sheet 1-A1`). T
 </table>
 ```
 
+---
+
 ## Error Responses
 
 All errors follow this format:
@@ -388,10 +306,7 @@ All errors follow this format:
   "error": {
     "message": "Human-readable error message",
     "type": "error_type",
-    "details": {
-      "field": "problem_field",
-      "reason": "Specific reason"
-    }
+    "details": { "field": "problem_field", "reason": "Specific reason" }
   }
 }
 ```
@@ -426,29 +341,20 @@ All errors follow this format:
 | **Presentations** | ODP, PPT, PPTX | Converted to PDF before parsing |
 | **Spreadsheets** | CSV, XLSX | Up to 10 MB in Playground; no sheet/column/row limits |
 
-> **Note:** Word, PowerPoint, and OpenDocument files are converted to PDF server-side before parsing. The output is the same structured markdown as a direct PDF upload.
+> **Note:** Word, PowerPoint, and OpenDocument files are converted to PDF server-side before parsing.
 
 ## Best Practices
 
-### 1. File Size Handling
+### File Size Handling
 - < 50MB: Use synchronous Parse API
-- > 50MB: Use Parse Jobs API
-- > 100MB: Consider splitting document first
+- \> 50MB: Use Parse Jobs API
+- \> 100MB: Consider splitting document first
 
-### 2. Rate Limiting
-- Implement exponential backoff
-- Start with 1 second delay
-- Double delay on each retry
-- Maximum 5 retries
+### Rate Limiting
+- Implement exponential backoff — start with 1s, double on each retry, max 5 retries
 
-### 3. Schema Design
-- Keep schemas simple and flat when possible
-- Use clear descriptions for each field
-- Mark optional fields appropriately
-- Test schema with sample data first
-
-### 4. Cost Optimization
-- Parse once, extract multiple times
+### Cost Optimization
+- Parse once, extract/split multiple times
 - Use specific schemas (avoid extracting everything)
 - Cache parsed results when possible
 
@@ -462,17 +368,14 @@ Direct HTTP API implementation using curl and shell scripts.
 
 ```bash
 export VISION_AGENT_API_KEY="v2_..."
-# All requests need:
--H "Authorization: Bearer $VISION_AGENT_API_KEY"
+BASE_URL="https://api.va.landing.ai"  # or https://api.va.eu-west-1.landing.ai for EU
 ```
 
-## 1. Parse Examples
-
-> See [Parse API Specification](#1-parse-api) for parameters and response structure.
+## Parse Examples
 
 ### Basic Parse
 ```bash
-curl -X POST https://api.landing.ai/v1/ade/parse \
+curl -s -X POST "$BASE_URL/v1/ade/parse" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "document=@document.pdf" \
   -F "model=dpt-2-latest"
@@ -480,7 +383,7 @@ curl -X POST https://api.landing.ai/v1/ade/parse \
 
 ### Parse with Page Splitting
 ```bash
-curl -X POST https://api.landing.ai/v1/ade/parse \
+curl -s -X POST "$BASE_URL/v1/ade/parse" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "document=@multi_page.pdf" \
   -F "split=page"
@@ -488,16 +391,13 @@ curl -X POST https://api.landing.ai/v1/ade/parse \
 
 ### Parse from URL
 ```bash
-curl -X POST https://api.landing.ai/v1/ade/parse \
+curl -s -X POST "$BASE_URL/v1/ade/parse" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "document_url=https://example.com/document.pdf"
 ```
 
-## 2. Extract Examples
+## Extract Examples
 
-> See [Extract API Specification](#2-extract-api) for parameters and response structure.
-
-### Extract from Markdown File
 ```bash
 SCHEMA='{
   "type": "object",
@@ -508,67 +408,31 @@ SCHEMA='{
   }
 }'
 
-# Extract accepts markdown, not raw documents — parse first if needed
-curl -X POST https://api.landing.ai/v1/ade/extract \
+# Extract from a markdown file (parse first if you have a PDF)
+curl -s -X POST "$BASE_URL/v1/ade/extract" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "markdown=@parsed_invoice.md" \
   -F "schema=$SCHEMA" \
   -F "model=extract-latest"
 ```
 
-### Extract from Parsed Markdown (Parse Once, Extract Many)
+### Parse Once, Extract Many
 ```bash
-# Parse once
-MARKDOWN=$(curl -s -X POST https://api.landing.ai/v1/ade/parse \
+# Parse once, save markdown
+MARKDOWN=$(curl -s -X POST "$BASE_URL/v1/ade/parse" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "document=@invoice.pdf" \
   | jq -r '.markdown')
 
 # Extract with different schemas
-curl -X POST https://api.landing.ai/v1/ade/extract \
+curl -s -X POST "$BASE_URL/v1/ade/extract" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "markdown=$MARKDOWN" \
   -F "schema=$SCHEMA"
 ```
 
-### Complex Nested Extraction
-```bash
-PO_SCHEMA='{
-  "type": "object",
-  "properties": {
-    "po_number": {"type": "string"},
-    "line_items": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "sku": {"type": "string"},
-          "quantity": {"type": "integer"},
-          "unit_price": {"type": "number"}
-        }
-      }
-    },
-    "total": {"type": "number"}
-  }
-}'
+## Split Examples
 
-# Parse first, then extract
-MARKDOWN=$(curl -s -X POST https://api.landing.ai/v1/ade/parse \
-  -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
-  -F "document=@purchase_order.pdf" \
-  | jq -r '.markdown')
-
-curl -X POST https://api.landing.ai/v1/ade/extract \
-  -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
-  -F "markdown=$MARKDOWN" \
-  -F "schema=$PO_SCHEMA"
-```
-
-## 3. Split Examples
-
-> See [Split API Specification](#3-split-api) for parameters and response structure.
-
-### Basic Document Splitting
 ```bash
 SPLIT_CLASSES='[
   {"name": "Invoice", "identifier": "Invoice Number"},
@@ -577,28 +441,25 @@ SPLIT_CLASSES='[
 ]'
 
 # Parse first, then split
-MARKDOWN=$(curl -s -X POST https://api.landing.ai/v1/ade/parse \
+MARKDOWN=$(curl -s -X POST "$BASE_URL/v1/ade/parse" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "document=@mixed_documents.pdf" \
   | jq -r '.markdown')
 
-curl -X POST https://api.landing.ai/v1/ade/split \
+curl -s -X POST "$BASE_URL/v1/ade/split" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "markdown=$MARKDOWN" \
   -F "split_class=$SPLIT_CLASSES" \
   -F "model=split-latest"
 ```
 
-## 4. Parse Jobs (Async, Large Files)
+## Parse Jobs (Async, Large Files)
 
-> See [Parse Jobs Specification](#4-parse-jobs-api-async) for parameters and response structure.
-
-### Create and Monitor Job
 ```bash
 #!/bin/bash
 
-# Create job for large file
-JOB_ID=$(curl -s -X POST https://api.landing.ai/v1/ade/parse/jobs \
+# Create job
+JOB_ID=$(curl -s -X POST "$BASE_URL/v1/ade/parse/jobs" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "document=@large_document.pdf" \
   -F "model=dpt-2-latest" \
@@ -608,7 +469,7 @@ echo "Created job: $JOB_ID"
 
 # Poll for completion
 while true; do
-  STATUS=$(curl -s -X GET "https://api.landing.ai/v1/ade/parse/jobs/$JOB_ID" \
+  STATUS=$(curl -s -X GET "$BASE_URL/v1/ade/parse/jobs/$JOB_ID" \
     -H "Authorization: Bearer $VISION_AGENT_API_KEY")
 
   STATE=$(echo "$STATUS" | jq -r '.status')
@@ -628,26 +489,24 @@ while true; do
 done
 ```
 
-## Complete Workflows
+## Complete Workflow: Parse → Split → Extract
 
-### Parse, Split, and Extract Pipeline
 ```bash
 #!/bin/bash
 
-# 1. Parse mixed document
-PARSED=$(curl -s -X POST https://api.landing.ai/v1/ade/parse \
+# 1. Parse
+MARKDOWN=$(curl -s -X POST "$BASE_URL/v1/ade/parse" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
-  -F "document=@mixed_invoices.pdf")
+  -F "document=@mixed_invoices.pdf" \
+  | jq -r '.markdown')
 
-MARKDOWN=$(echo "$PARSED" | jq -r '.markdown')
-
-# 2. Split by document type
+# 2. Split
 SPLIT_CLASSES='[
   {"name": "Invoice", "identifier": "Invoice Number"},
   {"name": "Credit Note", "identifier": "Credit Note Number"}
 ]'
 
-SPLITS=$(curl -s -X POST https://api.landing.ai/v1/ade/split \
+SPLITS=$(curl -s -X POST "$BASE_URL/v1/ade/split" \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "markdown=$MARKDOWN" \
   -F "split_class=$SPLIT_CLASSES")
@@ -666,7 +525,7 @@ echo "$SPLITS" | jq -c '.splits[]' | while read -r split; do
 
   echo "Processing $TYPE: $ID"
 
-  curl -s -X POST https://api.landing.ai/v1/ade/extract \
+  curl -s -X POST "$BASE_URL/v1/ade/extract" \
     -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
     -F "markdown=$MD" \
     -F "schema=$SCHEMA" \
@@ -674,40 +533,8 @@ echo "$SPLITS" | jq -c '.splits[]' | while read -r split; do
 done
 ```
 
-### Table Data Extraction
-```bash
-#!/bin/bash
+## Error Handling with Retry
 
-PARSED=$(curl -s -X POST https://api.landing.ai/v1/ade/parse \
-  -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
-  -F "document=@financial_report.pdf")
-
-# Get first table's markdown
-TABLE_MD=$(echo "$PARSED" | jq -r '
-  .chunks[] | select(.type == "table") | .markdown' | head -1)
-
-if [ -z "$TABLE_MD" ]; then
-  echo "No tables found" >&2
-  exit 1
-fi
-
-TABLE_SCHEMA='{"type": "object", "properties": {
-  "revenue_2023": {"type": "number"},
-  "revenue_2024": {"type": "number"},
-  "profit_2023": {"type": "number"},
-  "profit_2024": {"type": "number"}
-}}'
-
-curl -s -X POST https://api.landing.ai/v1/ade/extract \
-  -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
-  -F "markdown=$TABLE_MD" \
-  -F "schema=$TABLE_SCHEMA" \
-  | jq '.extraction'
-```
-
-## Error Handling
-
-### HTTP Status Check with Retry
 ```bash
 #!/bin/bash
 
@@ -715,7 +542,7 @@ MAX_RETRIES=3
 RETRY_COUNT=0
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-  RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://api.landing.ai/v1/ade/parse \
+  RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/v1/ade/parse" \
     -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
     -F "document=@document.pdf")
 
@@ -759,12 +586,6 @@ curl -s ... | jq '.chunks[] | select(.grounding.page == 0)'
 # Group chunks by type with counts
 curl -s ... | jq '.chunks | group_by(.type) | map({type: .[0].type, count: length})'
 
-# Tables as CSV
-curl -s ... | jq -r '.chunks[] | select(.type == "table") | .markdown' | sed 's/|/,/g; s/^,//; s/,$//'
-
-# Calculate bounding box areas
-curl -s ... | jq '[.chunks[] | .grounding.box | ((.right - .left) * (.bottom - .top))] | add'
-
 # Get specific extracted field
 curl -s ... | jq '.extraction.invoice_number'
 
@@ -772,31 +593,27 @@ curl -s ... | jq '.extraction.invoice_number'
 curl -s ... | jq '.extraction.line_items[] | {sku: .sku, total: (.quantity * .unit_price)}'
 ```
 
-## Best Practices
+## Shell Functions for Reuse
 
-### Save Intermediate Results
-```bash
-# Save parsed output for reuse (parse once, extract many)
-curl -s -X POST https://api.landing.ai/v1/ade/parse \
-  -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
-  -F "document=@document.pdf" | tee parsed_output.json
-
-# Later, extract from saved markdown
-MARKDOWN=$(jq -r '.markdown' < parsed_output.json)
-```
-
-### Shell Functions for Reuse
 ```bash
 ade_parse() {
-  curl -s -X POST https://api.landing.ai/v1/ade/parse \
+  curl -s -X POST "$BASE_URL/v1/ade/parse" \
     -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
     -F "document=@$1"
 }
 
 ade_extract() {
-  curl -s -X POST https://api.landing.ai/v1/ade/extract \
+  curl -s -X POST "$BASE_URL/v1/ade/extract" \
     -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
     -F "markdown=$1" \
     -F "schema=$2"
 }
 ```
+
+---
+
+## External Links
+
+- [API Reference](https://docs.landing.ai/api-reference)
+- [ADE Documentation](https://docs.landing.ai/ade)
+- [Supported File Types](https://docs.landing.ai/ade/ade-file-types)
