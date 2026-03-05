@@ -1,3 +1,13 @@
+---
+name: landingai-ade-api
+description: "REST API specification for LandingAI's Agentic Document Extraction (ADE). Covers all endpoints (Parse, Extract, Split, Parse Jobs), request parameters, response structures, data types, error codes, model versions, and curl examples."
+languages: http/bash
+versions: v1
+updated-on: 2026-03-04
+source: maintainer
+tags: landingai,ade,api,document-extraction,parse,extract,split,parse-jobs,curl,rest
+---
+
 # LandingAI ADE API Specification
 
 Complete API specification for LandingAI's Agentic Document Extraction (ADE).
@@ -15,10 +25,15 @@ ADE provides a REST API for document parsing, splitting, data extraction, and la
 
 **Authentication**: All requests require `Authorization: Bearer $VISION_AGENT_API_KEY`
 
-## Implementation Guides
+## SDK Quick Start
 
-- [Python SDK Reference](ADE_python.md) — Pydantic schemas, async, exception handling
-- [TypeScript SDK Reference](ADE_TS.md) — Type definitions, Zod, async/await
+```bash
+# Python
+pip install landingai-ade
+
+# TypeScript / JavaScript
+npm install landingai-ade
+```
 
 ## API Endpoints
 

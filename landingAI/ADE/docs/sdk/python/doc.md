@@ -1,8 +1,16 @@
+---
+name: landingai-ade-python
+description: "Python SDK reference for LandingAI's Agentic Document Extraction (ADE). Includes Pydantic schema extraction, async processing, error handling, save_to, visual grounding, table cell lookup, and complete API context."
+languages: python
+versions: ">=0.1.0"
+updated-on: 2026-03-04
+source: maintainer
+tags: landingai,ade,python,sdk,pydantic,document-extraction,parse,extract,split,async
+---
+
 # LandingAI ADE — Python SDK Reference
 
 Python SDK for LandingAI's Agentic Document Extraction.
-
-> For response structures, data types, and error codes see the [API Specification](ADE_API.md).
 
 ## Installation
 
@@ -27,8 +35,6 @@ client = LandingAIADE(base_url="https://api.va.eu-west-1.landing.ai/v1/ade")
 ```
 
 ## 1. Parse API
-
-> See [Parse API Specification](ADE_API.md#1-parse-api) for request parameters and response structure.
 
 ### Basic Usage
 ```python
@@ -133,8 +139,6 @@ print(f"Sheet 1, cell B2: {value}")
 
 ## 2. Extract API
 
-> See [Extract API Specification](ADE_API.md#2-extract-api) for request parameters and response structure.
-
 ### Pydantic Schema Extraction
 ```python
 from pydantic import BaseModel, Field
@@ -188,8 +192,6 @@ for field, meta in response.extraction_metadata.items():
 
 ## 3. Split API
 
-> See [Split API Specification](ADE_API.md#3-split-api) for request parameters and response structure.
-
 ### Basic Splitting
 ```python
 parsed = client.parse(document=Path("mixed_documents.pdf"))
@@ -242,8 +244,6 @@ for split in splits.splits:
 ```
 
 ## 4. Parse Jobs (Async, Large Files)
-
-> See [Parse Jobs Specification](ADE_API.md#4-parse-jobs-api-async) for parameters and response structure.
 
 ```python
 import time
@@ -339,3 +339,196 @@ async def parse_multiple(files: list[str]):
 
     return [r for r in results if not isinstance(r, Exception)]
 ```
+
+---
+
+## API Reference
+
+The following sections provide the complete API context so this document is fully self-contained.
+
+### Base Configuration
+
+| Region | Base URL |
+|--------|----------|
+| US (default) | `https://api.va.landing.ai/v1/ade` |
+| EU | `https://api.va.eu-west-1.landing.ai/v1/ade` |
+
+**Authentication**: All requests require `Authorization: Bearer $VISION_AGENT_API_KEY`
+
+### API Endpoints Summary
+
+| Endpoint | Method | Path | Model | Input |
+|----------|--------|------|-------|-------|
+| Parse | POST | `/v1/ade/parse` | `dpt-2-latest` | `document` (file) or `document_url` |
+| Extract | POST | `/v1/ade/extract` | `extract-latest` | `markdown` (file/string) or `markdown_url` + `schema` |
+| Split | POST | `/v1/ade/split` | `split-latest` | `markdown` (file/string) or `markdown_url` + `split_class` |
+| Create Job | POST | `/v1/ade/parse/jobs` | `dpt-2-latest` | `document` or `document_url` |
+| Get Job | GET | `/v1/ade/parse/jobs/{id}` | — | — |
+| List Jobs | GET | `/v1/ade/parse/jobs` | — | `?status=&page=&pageSize=` |
+
+### Parse API — Request Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `document` | file | One required | Local file — PDF, images (JPG/PNG/TIFF/WEBP/GIF/BMP/PSD + more), Word (DOC/DOCX/ODT), PowerPoint (PPT/PPTX/ODP), spreadsheets (XLSX/CSV) |
+| `document_url` | string | One required | Remote document URL |
+| `model` | string | No | Model version (default: `dpt-2-latest`) |
+| `split` | string | No | Split mode: `"page"` to split by pages |
+
+### Parse API — Response Structure
+
+```json
+{
+  "markdown": "string",
+  "chunks": [
+    {
+      "id": "uuid",
+      "type": "text|table|marginalia|figure|scan_code|logo|card|attestation",
+      "markdown": "string",
+      "grounding": {
+        "page": 0,
+        "box": { "left": 0.1, "top": 0.2, "right": 0.9, "bottom": 0.3 }
+      }
+    }
+  ],
+  "grounding": {
+    "chunk-id": {
+      "type": "chunkText|chunkTable|chunkFigure|...",
+      "page": 0,
+      "box": { "left": 0.1, "top": 0.2, "right": 0.9, "bottom": 0.3 }
+    },
+    "0-1": { "type": "table", "page": 0, "box": { } },
+    "0-2": {
+      "type": "tableCell", "page": 0, "box": { },
+      "position": { "row": 0, "col": 0, "rowspan": 1, "colspan": 1, "chunk_id": "uuid" }
+    }
+  },
+  "splits": [
+    { "chunks": ["id1"], "class": "page", "identifier": "0", "markdown": "string", "pages": [0] }
+  ],
+  "metadata": {
+    "filename": "document.pdf", "org_id": "org_abc", "page_count": 5,
+    "duration_ms": 1234, "credit_usage": 3, "version": "dpt-2-latest",
+    "job_id": "job_abc", "failed_pages": []
+  }
+}
+```
+
+### Extract API — Request Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `schema` | JSON string | Yes | JSON Schema defining extraction structure |
+| `markdown` | string/file | One required | Markdown content or markdown file to extract from |
+| `markdown_url` | string | One required | URL to markdown content |
+| `model` | string | No | Model version (default: `extract-latest`) |
+
+### Extract API — Response Structure
+
+```json
+{
+  "extraction": { "field1": "value1", "field2": 123 },
+  "extraction_metadata": {
+    "field1": { "references": ["chunk-uuid-1", "chunk-uuid-2"] }
+  },
+  "metadata": {
+    "credit_usage": 1, "duration_ms": 567, "filename": "document.pdf",
+    "job_id": "job_xyz", "org_id": "org_abc", "version": "extract-latest",
+    "fallback_model_version": null, "schema_violation_error": null
+  }
+}
+```
+
+### Split API — Request Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `split_class` | JSON array | Yes | Classification configuration |
+| `markdown` | string | One required | Markdown content to split |
+| `markdownUrl` | string | One required | URL to markdown content |
+| `model` | string | No | Model version (default: `split-latest`) |
+
+### Split API — Response Structure
+
+```json
+{
+  "splits": [
+    {
+      "chunks": ["chunk-id-1"], "class": "Invoice", "classification": "Invoice",
+      "identifier": "INV-001", "markdowns": ["# Invoice content..."], "pages": [0, 1]
+    }
+  ],
+  "metadata": {
+    "credit_usage": 2, "duration_ms": 789, "filename": "mixed.pdf",
+    "page_count": 10, "job_id": "job_split", "org_id": "org_abc", "version": "split-latest"
+  }
+}
+```
+
+### Parse Jobs API
+
+**Create**: `POST /parse/jobs` — same parameters as Parse plus optional `output_save_url` for ZDR.
+
+**Get Status**: `GET /parse/jobs/{job_id}` — returns `{ job_id, status, progress (0-1), failure_reason, data (ParseResponse when completed), output_url (presigned, expires 1hr) }`.
+
+**List**: `GET /parse/jobs?status=&page=&pageSize=` — returns `{ jobs: [{ job_id, status, progress, received_at }], has_more }`.
+
+### Data Types
+
+#### Chunk Types
+- `text` — Characters, paragraphs, headings, lists, form fields, checkboxes, code blocks
+- `table` — Grid of rows and columns; includes spreadsheets and receipts
+- `figure` — Visual/graphical non-text content — images, graphs, flowcharts, diagrams
+- `marginalia` — Content in document margins — headers, footers, page numbers, handwritten notes
+- `logo` — Logos (DPT-2 only)
+- `card` — ID cards and driver's licenses (DPT-2 only)
+- `attestation` — Signatures, stamps, and seals (DPT-2 only)
+- `scan_code` — QR codes and barcodes (DPT-2 only)
+
+#### Grounding Types
+- Chunk grounding: `chunkText`, `chunkTable`, `chunkFigure`, `chunkMarginalia`, `chunkLogo`, `chunkCard`, `chunkAttestation`, `chunkScanCode`
+- Structure: `table`, `tableCell` (with position data)
+
+#### Bounding Box
+All coordinates normalized 0–1: `{ left, top, right, bottom }`.
+
+#### Table Cell Position
+`{ row, col, rowspan, colspan, chunk_id }` — zero-indexed.
+
+#### Table Chunk Formats
+
+**PDF/Image tables**: Element IDs use `{page}-{base62_seq}`. Grounding object has bounding boxes and `tableCell` entries.
+
+**Spreadsheet tables (XLSX/CSV)**: Element IDs use `{tab_name}-{cell_ref}` (e.g., `Sheet 1-B2`). **Grounding is null** — positions are encoded in IDs.
+
+### Error Codes
+
+| Status | Error Type | Description | Solution |
+|--------|------------|-------------|----------|
+| 400 | `validation_error` | Invalid parameters | Check request format |
+| 401 | `authentication_error` | Invalid API key | Check VISION_AGENT_API_KEY |
+| 413 | `payload_too_large` | File too large | Use Parse Jobs API |
+| 422 | `unprocessable_entity` | Invalid file type or malformed schema | Validate file format and schema JSON |
+| 429 | `rate_limit_error` | Too many requests | Implement backoff |
+| 500 | `internal_error` | Server error | Retry with backoff |
+| 504 | `timeout_error` | Request timeout | Use Parse Jobs API |
+
+### Supported File Types
+
+| Category | Formats | Notes |
+|----------|---------|-------|
+| **PDF** | PDF | Up to 100 pages; no password-protected files |
+| **Images** | JPEG, JPG, PNG, APNG, BMP, DCX, DDS, DIB, GD, GIF, ICNS, JP2, PCX, PPM, PSD, TGA, TIF, TIFF, WEBP | |
+| **Text Documents** | DOC, DOCX, ODT | Converted to PDF before parsing |
+| **Presentations** | ODP, PPT, PPTX | Converted to PDF before parsing |
+| **Spreadsheets** | CSV, XLSX | Up to 10 MB in Playground; no sheet/column/row limits |
+
+> **Note:** Word, PowerPoint, and OpenDocument files are converted to PDF server-side before parsing.
+
+### Model Versions
+
+| Operation | Current Version | Description |
+|-----------|----------------|-------------|
+| Parse | `dpt-2-latest` | Document parsing and OCR |
+| Extract | `extract-latest` | Schema-based extraction |
+| Split | `split-latest` | Document classification |
