@@ -179,7 +179,7 @@ Classifies and splits mixed documents by type.
 |-----------|------|----------|-------------|
 | `split_class` | JSON array | Yes | Classification configuration (see below) |
 | `markdown` | string | One required | Markdown content to split |
-| `markdownUrl` | string | One required | URL to markdown content |
+| `markdown_url` | string | One required | URL to markdown content |
 | `model` | string | No | Model version (default: `split-latest`) |
 
 #### Split Class Structure
