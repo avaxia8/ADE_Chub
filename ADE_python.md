@@ -258,7 +258,7 @@ while True:
     print(f"Status: {status.status}, Progress: {status.progress * 100:.0f}%")
 
     if status.status == "completed":
-        result = status.result
+        result = status.data
         break
     elif status.status == "failed":
         raise RuntimeError(f"Job failed: {status.failure_reason}")
@@ -311,7 +311,7 @@ def poll_job(client, job_id, timeout=300):
     while t.time() - start < timeout:
         status = client.parse_jobs.get(job_id)
         if status.status == "completed":
-            return status.result
+            return status.data
         if status.status == "failed":
             raise RuntimeError(f"Job failed: {status.failure_reason}")
         t.sleep(5)

@@ -115,8 +115,7 @@ Extracts structured data from documents or markdown using JSON schemas.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `schema` | JSON string | Yes | JSON Schema defining extraction structure |
-| `document` | file | One required | Direct extraction from file |
-| `markdown` | string | One required | Markdown content to extract from |
+| `markdown` | string/file | One required | Markdown content or markdown file to extract from |
 | `markdown_url` | string | One required | URL to markdown content |
 | `model` | string | No | Model version (default: `extract-latest`) |
 
@@ -237,7 +236,11 @@ For large files (>50MB), use asynchronous processing.
   "progress": 0.75,              // 0-1 progress indicator
   "failure_reason": null,         // Error message if failed
   "received_at": 1234567890,     // Unix timestamp
-  "result": { /* ParseResponse */ }  // Only when completed
+  "data": { /* ParseResponse */ },   // Only when completed and output_save_url not used
+  "output_url": "https://...",       // Presigned URL when result >1MB or output_save_url was set (expires 1hr)
+  "org_id": "org_abc",
+  "version": "dpt-2-latest",
+  "metadata": { /* ParseMetadata */ }
 }
 ```
 
@@ -285,8 +288,11 @@ For large files (>50MB), use asynchronous processing.
 - `chunkText` - Text chunk grounding
 - `chunkTable` - Table chunk grounding
 - `chunkFigure` - Figure chunk grounding
-- `chunkFormula` - Formula chunk grounding
-- `chunkList` - List chunk grounding
+- `chunkMarginalia` - Marginalia chunk grounding
+- `chunkLogo` - Logo chunk grounding
+- `chunkCard` - Card chunk grounding
+- `chunkAttestation` - Attestation chunk grounding
+- `chunkScanCode` - Scan code chunk grounding
 
 #### For Structure Elements (no prefix)
 - `table` - Actual table structure
@@ -382,6 +388,7 @@ All errors follow this format:
 | 400 | `validation_error` | Invalid parameters | Check request format |
 | 401 | `authentication_error` | Invalid API key | Check VISION_AGENT_API_KEY |
 | 413 | `payload_too_large` | File too large | Use Parse Jobs API |
+| 422 | `unprocessable_entity` | Invalid file type or malformed schema | Validate file format and schema JSON |
 | 429 | `rate_limit_error` | Too many requests | Implement backoff |
 | 500 | `internal_error` | Server error | Retry with backoff |
 | 504 | `timeout_error` | Request timeout | Use Parse Jobs API |
@@ -475,7 +482,7 @@ curl -X POST https://api.landing.ai/v1/ade/parse \
 
 > See [Extract API Specification](#2-extract-api) for parameters and response structure.
 
-### Direct Extraction from Document
+### Extract from Markdown File
 ```bash
 SCHEMA='{
   "type": "object",
@@ -486,9 +493,10 @@ SCHEMA='{
   }
 }'
 
+# Extract accepts markdown, not raw documents — parse first if needed
 curl -X POST https://api.landing.ai/v1/ade/extract \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
-  -F "document=@invoice.pdf" \
+  -F "markdown=@parsed_invoice.md" \
   -F "schema=$SCHEMA" \
   -F "model=extract-latest"
 ```
@@ -529,9 +537,15 @@ PO_SCHEMA='{
   }
 }'
 
-curl -X POST https://api.landing.ai/v1/ade/extract \
+# Parse first, then extract
+MARKDOWN=$(curl -s -X POST https://api.landing.ai/v1/ade/parse \
   -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
   -F "document=@purchase_order.pdf" \
+  | jq -r '.markdown')
+
+curl -X POST https://api.landing.ai/v1/ade/extract \
+  -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
+  -F "markdown=$MARKDOWN" \
   -F "schema=$PO_SCHEMA"
 ```
 
@@ -588,7 +602,7 @@ while true; do
   echo "Status: $STATE, Progress: $(echo "$PROGRESS * 100" | bc)%"
 
   if [ "$STATE" = "completed" ]; then
-    echo "$STATUS" | jq '.result' > "parse_result.json"
+    echo "$STATUS" | jq '.data' > "parse_result.json"
     break
   elif [ "$STATE" = "failed" ]; then
     echo "Job failed: $(echo "$STATUS" | jq -r '.failure_reason')" >&2
@@ -767,7 +781,7 @@ ade_parse() {
 ade_extract() {
   curl -s -X POST https://api.landing.ai/v1/ade/extract \
     -H "Authorization: Bearer $VISION_AGENT_API_KEY" \
-    -F "document=@$1" \
+    -F "markdown=$1" \
     -F "schema=$2"
 }
 ```

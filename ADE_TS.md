@@ -176,8 +176,7 @@ await client.parse({
 ```typescript
 async extract(options: {
   schema: string;                          // JSON Schema as string
-  document?: string | Buffer | Readable;
-  markdown?: string;
+  markdown?: string;                       // Markdown content or file path
   markdownUrl?: string;
   model?: string;       // Default: "extract-latest"
   saveTo?: string;
@@ -196,9 +195,9 @@ const schema = {
   required: ["invoice_number", "total_amount"]
 };
 
-// Direct from document
+// Direct from markdown file
 const response = await client.extract({
-  document: "./invoice.pdf",
+  markdown: "./invoice_parsed.md",
   schema: JSON.stringify(schema),
   model: "extract-latest"
 });
@@ -380,7 +379,8 @@ async get(jobId: string): Promise<{
   status: "pending" | "processing" | "completed" | "failed";
   progress: number;
   failure_reason?: string;
-  result?: ParseResponse;
+  data?: ParseResponse;          // Present when completed and output_save_url not used
+  output_url?: string;           // Presigned URL when result >1MB or output_save_url was set
 }>
 
 async list(options?: {
@@ -402,7 +402,7 @@ async function parseLargeFile(
     const status = await client.parseJobs.get(job.job_id);
     console.log(`${status.status}: ${(status.progress * 100).toFixed(0)}%`);
 
-    if (status.status === "completed") return status.result!;
+    if (status.status === "completed") return status.data!;
     if (status.status === "failed") {
       throw new Error(`Job failed: ${status.failure_reason}`);
     }
