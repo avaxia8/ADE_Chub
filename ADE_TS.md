@@ -48,7 +48,7 @@ interface ParseResponse {
 
 interface Chunk {
   id: string;
-  type: "text" | "table" | "figure" | "formula" | "list";
+  type: "text" | "table" | "figure" | "marginalia" | "logo" | "card" | "attestation" | "scan_code";
   markdown: string;
   grounding: { page: number; box: BoundingBox };
 }

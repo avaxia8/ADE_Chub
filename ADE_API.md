@@ -270,11 +270,14 @@ For large files (>50MB), use asynchronous processing.
 ## Data Types
 
 ### Chunk Types
-- `text` - Text paragraphs and content
-- `table` - Table structures
-- `figure` - Images and diagrams
-- `formula` - Mathematical formulas
-- `list` - Bulleted or numbered lists
+- `text` - Characters, paragraphs, headings, lists, form fields, checkboxes, code blocks
+- `table` - Grid of rows and columns; includes spreadsheets and receipts
+- `figure` - Visual/graphical non-text content — images, graphs, flowcharts, diagrams
+- `marginalia` - Content in document margins — headers, footers, page numbers, handwritten notes
+- `logo` - Logos (DPT-2 only)
+- `card` - ID cards and driver's licenses (DPT-2 only)
+- `attestation` - Signatures, stamps, and seals (DPT-2 only)
+- `scan_code` - QR codes and barcodes (DPT-2 only)
 
 ### Grounding Types
 
