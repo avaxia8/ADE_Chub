@@ -479,3 +479,10 @@ All coordinates normalized 0–1: `{ left, top, right, bottom }`.
 | Parse | `dpt-2-latest` | Document parsing and OCR |
 | Extract | `extract-latest` | Schema-based extraction |
 | Split | `split-latest` | Document classification |
+
+---
+
+## External Links
+
+- [Python SDK Documentation](https://docs.landing.ai/ade/ade-python)
+- [Python SDK GitHub](https://github.com/landing-ai/ade-python)
